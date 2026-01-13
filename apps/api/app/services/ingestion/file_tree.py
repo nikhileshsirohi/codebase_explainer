@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 from app.db.mongo import get_db
 from app.services.ingestion.github_client import GitHubClient, GitHubAPIError
 from app.utils.repo_url import parse_github_owner_repo
+from app.services.indexing.indexer import build_embeddings_for_job
 
 REPO_FILES = "repo_files"
 INGEST_JOBS = "ingest_jobs"
@@ -71,11 +72,13 @@ async def ingest_github_file_tree(repo_doc: Dict[str, Any], job_doc: Dict[str, A
             {"_id": repo_doc["_id"]},
             {"$set": {"default_branch": default_branch, "updated_at": datetime.utcnow()}},
         )
-        
+
         content_stats = await ingest_file_contents(repo_doc=repo_doc, job_doc=job_doc)
 
-        await _set_job(job_id, "done", extra={"stats": {"files_indexed": len(files), **content_stats}})
-        return {"default_branch": default_branch, "files_indexed": len(files), **content_stats}
+        emb_stats = await build_embeddings_for_job(repo_doc["_id"], job_id)
+
+        await _set_job(job_id, "done", extra={"stats": {"files_indexed": len(files), **content_stats, **emb_stats}})
+        return {"default_branch": default_branch, "files_indexed": len(files), **content_stats, **emb_stats}
 
     except (GitHubAPIError, ValueError) as e:
         await _set_job(job_id, "failed", error=str(e))
