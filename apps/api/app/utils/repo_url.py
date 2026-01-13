@@ -31,3 +31,11 @@ def canonicalize_repo_url(raw: str) -> str:
         path = "/" + "/".join(parts)
 
     return f"https://{host}{path}"
+
+
+def parse_github_owner_repo(canonical_url: str) -> tuple[str, str]:
+    u = urlparse(canonical_url)
+    parts = [p for p in (u.path or "").split("/") if p]
+    if len(parts) < 2:
+        raise ValueError("Invalid GitHub repo URL (missing owner/repo)")
+    return parts[0], parts[1]

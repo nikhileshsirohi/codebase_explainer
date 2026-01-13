@@ -17,6 +17,7 @@ from app.core.config import settings
 from app.core.logging import setup_logging
 from app.api.v1.health import router as health_router
 from app.api.v1.ingest import router as ingest_router
+from app.api.v1.jobs import router as jobs_router
 from app.db.repos import ensure_indexes
 
 logger = setup_logging()
@@ -31,6 +32,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router, prefix="/api/v1")
     app.include_router(ingest_router, prefix="/api/v1")
+    app.include_router(jobs_router, prefix="/api/v1")
     return app
 
 app = create_app()
