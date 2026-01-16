@@ -156,3 +156,50 @@ docker exec -it codebase_explainer_ollama ollama pull nomic-embed-text
 docker exec -it codebase_explainer_ollama ollama pull qwen2.5-coder:7b-instruct
 
 curl http://localhost:8000/docs
+```
+## How to run (Without Docker)
+
+```bass
+https://github.com/nikhileshsirohi/codebase_explainer.git
+cd codebase_explainer
+```
+### Install Backend Dependencies
+```bash
+cd apps/api
+pip install -e ".[dev]"
+```
+
+### Start the FastAPI Server
+***macOS / Linux***
+```bash
+python -m uvicorn app.main:app --reload --port 8000
+```
+
+***Windows***
+```bash
+uvicorn app.main:app --reload --port 8000
+```
+***The API will be available at:***
+```bash
+http://127.0.0.1:8000
+```
+
+### START Ollama (Required)
+*** In another terminal ***
+```bash
+ollama serve
+ollama pull nomic-embed-text
+ollama pull qwen2.5-coder:7b-instruct
+```
+
+***Verify Is everything running***
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+***Expected response***
+{
+  "status": "ok",
+  "mongo": true,
+  "ollama": true
+}
