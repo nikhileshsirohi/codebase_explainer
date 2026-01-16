@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from itertools import count
+
 from typing import Dict, List
 from fastapi import APIRouter, HTTPException
 from bson import ObjectId
@@ -40,8 +40,8 @@ async def ask_repo(repo_id: str, payload: AskRequest):
         raise HTTPException(status_code=400, detail="Invalid repo_id")
 
     # Guard: repo must be indexed (code_chunks exist)
-    count = await db[CODE_CHUNKS].count_documents({"repo_id": repo_oid})
-    if count == 0:
+    chunk_count = await db[CODE_CHUNKS].count_documents({"repo_id": repo_oid})
+    if chunk_count == 0:
         raise HTTPException(status_code=409, detail="Repo not indexed yet. Run /ingest and wait for job done.")
 
     # Session handling
@@ -70,7 +70,7 @@ async def ask_repo(repo_id: str, payload: AskRequest):
 
     try:
         rag = await generate_answer(repo_oid, payload.question, history=history, k=payload.top_k)
-    except LLMRateLimitError as e:
+    except LLMRateLimitError:
         raise HTTPException(
             status_code=429,
             detail="LLM quota exceeded. Add billing/paid tier for Gemini, or switch to a local fallback model."
