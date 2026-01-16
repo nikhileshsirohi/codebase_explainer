@@ -10,4 +10,5 @@ def get_client() -> AsyncIOMotorClient:
     return _client
 
 def get_db():
-    return get_client()[settings.MONGODB_DB]
+    db = get_client()[settings.MONGODB_DB]
+    return db

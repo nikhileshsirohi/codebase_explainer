@@ -7,9 +7,10 @@ from bson import ObjectId
 from app.db.mongo import get_db
 from app.core.config import settings
 from app.services.embeddings.gemini_embedder import GeminiEmbedder
-from app.services.llm.gemini_chat import GeminiChatLLM
 
-from app.services.llm.local_t5 import LocalT5LLM
+from app.services.llm.gemini_chat import GeminiChatLLM
+from app.services.llm.ollama_llm import OllamaLLM
+
 from app.services.llm.gemini_chat import LLMRateLimitError
 
 @dataclass
@@ -83,9 +84,11 @@ def build_prompt(question: str, chunks: List[RetrievedChunk], history: List[Dict
 
     context = _format_chunks(chunks) if chunks else "(no relevant context found)"
 
-    return f"""You are an AI Codebase Explainer. Answer using ONLY the provided code context.
-If the context is insufficient, say so and ask for what to ingest or where to look.
-Always cite sources in this format: [n] path:start-end.
+    return f"""You are a senior software engineer.
+Answer concisely and accurately.
+Base answers ONLY on the provided code context.
+Use citations like [1] path:start-end.
+Do not repeat the question or instructions.
 
 Conversation (recent):
 {history_text}
@@ -104,13 +107,14 @@ Now write:
 
 async def generate_answer(repo_oid: ObjectId, question: str, history: List[Dict[str, str]], k: int = 8) -> Dict[str, Any]:
     chunks = await retrieve_chunks(repo_oid, question, k=k)
-    provider = settings.LLM_PROVIDER
     prompt = build_prompt(question, chunks, history)
-    if provider not in ("auto", "gemini", "local"):
+
+    provider = (settings.LLM_PROVIDER or "auto").lower()
+    if provider not in ("auto", "gemini", "ollama"):
         provider = "auto"
 
-    if provider == "local":
-        answer = LocalT5LLM().generate(prompt)
+    if provider == "ollama":
+        answer = OllamaLLM(model=settings.OLLAMA_MODEL).generate(prompt)
     else:
         try:
             answer = GeminiChatLLM().generate(prompt)
@@ -118,7 +122,7 @@ async def generate_answer(repo_oid: ObjectId, question: str, history: List[Dict[
             # auto fallback OR if gemini fails and provider=auto
             if provider == "gemini":
                 raise
-            answer = LocalT5LLM().generate(prompt)
+            answer = OllamaLLM(model=settings.OLLAMA_MODEL).generate(prompt)
 
     return {
         "answer": answer,

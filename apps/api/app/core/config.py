@@ -17,7 +17,8 @@ class Settings(BaseSettings):
     GEMINI_CHAT_MODEL: str = "gemini-2.0-flash"
     CHAT_HISTORY_MAX_TURNS: int = 6
 
-    LLM_PROVIDER: str = "auto"  # auto|gemini|local
+    LLM_PROVIDER: str = "auto"  # auto | gemini | local | ollama
     LOCAL_LLM_MODEL: str = "google/flan-t5-base"
+    OLLAMA_MODEL: str = "qwen2.5-coder:7b-instruct"
 
 settings = Settings()
