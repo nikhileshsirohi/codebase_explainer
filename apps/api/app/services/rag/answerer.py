@@ -37,7 +37,15 @@ async def retrieve_chunks(repo_oid: ObjectId, question: str, k: int = 8) -> List
     embedder = GeminiEmbedder()
     qvec = embedder.embed_text(question)
 
-    fetch_limit = max(k * 5, 40)  # fetch more, then filter down to k
+    q = question.lower()
+    flow_mode = any(
+        x in q for x in (
+            "end-to-end", "end to end", "flow", "pipeline",
+            "how does", "how is", "steps", "process"
+        )
+    )
+
+    fetch_limit = max(k * 8, 80) if flow_mode else max(k * 5, 40)
 
     pipeline = [
         {
@@ -46,7 +54,7 @@ async def retrieve_chunks(repo_oid: ObjectId, question: str, k: int = 8) -> List
                 "path": "embedding",
                 "queryVector": qvec,
                 "filter": {"repo_id": repo_oid},
-                "numCandidates": max(200, fetch_limit * 5),
+                "numCandidates": max(400, fetch_limit * 5),
                 "limit": fetch_limit,
             }
         },
@@ -65,6 +73,8 @@ async def retrieve_chunks(repo_oid: ObjectId, question: str, k: int = 8) -> List
     rows = await db["code_chunks"].aggregate(pipeline).to_list(length=None)
 
     out: List[RetrievedChunk] = []
+    seen: set[tuple[str, int, int]] = set()
+
     for r in rows:
         path = (r.get("path") or "")
         text = (r.get("text") or "").strip()
@@ -75,19 +85,75 @@ async def retrieve_chunks(repo_oid: ObjectId, question: str, k: int = 8) -> List
         if len(text) < 80:
             continue
 
+        start_line = int(r.get("start_line", 0) or 0)
+        end_line = int(r.get("end_line", 0) or 0)
+        key = (path, start_line, end_line)
+        if key in seen:
+            continue
+        seen.add(key)
+
         out.append(
             RetrievedChunk(
                 path=path,
-                start_line=int(r.get("start_line", 0) or 0),
-                end_line=int(r.get("end_line", 0) or 0),
+                start_line=start_line,
+                end_line=end_line,
                 text=text,
                 score=float(r.get("score", 0.0) or 0.0),
             )
         )
-        if len(out) >= k:
+
+        # For normal Qs, stop early. For flow_mode, collect more before slicing.
+        if not flow_mode and len(out) >= k:
             break
 
-    return out
+    # Keyword fallback only when flow question lacks coverage
+    if flow_mode and len(out) < min(5, k):
+        keywords = [
+            "ingest", "ingestion", "chunk", "embedding",
+            "index", "repo_files", "repo_file_contents",
+            "code_chunks", "build_embeddings"
+        ]
+
+        cursor = db["code_chunks"].find(
+            {
+                "repo_id": repo_oid,
+                "text": {"$regex": "|".join(keywords), "$options": "i"},
+            },
+            {"path": 1, "start_line": 1, "end_line": 1, "text": 1},
+        ).limit(50)
+
+        extra = await cursor.to_list(length=50)
+        for r in extra:
+            path = (r.get("path") or "")
+            text = (r.get("text") or "").strip()
+            if len(text) < 80:
+                continue
+
+            lp = path.lower()
+            if lp.endswith(".md") or lp in ("readme.md", "license", "license.md"):
+                continue
+
+            start_line = int(r.get("start_line", 0) or 0)
+            end_line = int(r.get("end_line", 0) or 0)
+            key = (path, start_line, end_line)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            out.append(
+                RetrievedChunk(
+                    path=path,
+                    start_line=start_line,
+                    end_line=end_line,
+                    text=text,
+                    score=0.0,  # keyword fallback
+                )
+            )
+
+            if len(out) >= k:
+                break
+
+    return out[:k]
 
 def build_prompt(question: str, chunks: List[RetrievedChunk], history: List[Dict[str, str]]) -> str:
     history_text = ""
@@ -226,7 +292,7 @@ def _pipeline_hints(chunks: List[RetrievedChunk]) -> str:
             continue
         seen.add(x)
         out.append(x)
-        
+
     out.sort(key=lambda s: _priority(s))
     return "\n".join(out[:20]) if out else "(none)"
 
