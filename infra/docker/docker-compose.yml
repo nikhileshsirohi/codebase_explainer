@@ -3,6 +3,7 @@ version: "3.9"
 services:
   api:
     build: .
+    container_name: codebase_explainer_api
     ports:
       - "8000:8000"
     depends_on:
@@ -10,21 +11,31 @@ services:
       - ollama
     environment:
       MONGODB_URI: mongodb://mongo:27017
+      MONGODB_DB: codebase_explainer
+      EMBEDDING_PROVIDER: ollama
       OLLAMA_BASE_URL: http://ollama:11434
+      LLM_PROVIDER: ollama
+    volumes:
+      - .:/app
+    restart: unless-stopped
 
   mongo:
     image: mongo:6
+    container_name: codebase_explainer_mongo
     ports:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
+    restart: unless-stopped
 
   ollama:
-    image: ollama/ollama
+    image: ollama/ollama:latest
+    container_name: codebase_explainer_ollama
     ports:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
+    restart: unless-stopped
 
 volumes:
   mongo_data:
