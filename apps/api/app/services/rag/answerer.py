@@ -12,6 +12,7 @@ from app.services.llm.gemini_chat import GeminiChatLLM
 from app.services.llm.ollama_llm import OllamaLLM
 
 from app.services.llm.gemini_chat import LLMRateLimitError
+from app.services.rag.symbols import extract_python_symbols
 
 @dataclass
 class RetrievedChunk:
@@ -90,7 +91,6 @@ async def retrieve_chunks(repo_oid: ObjectId, question: str, k: int = 8) -> List
 def build_prompt(question: str, chunks: List[RetrievedChunk], history: List[Dict[str, str]]) -> str:
     history_text = ""
     if history:
-        # history items: {"role": "user"/"assistant", "content": "..."}
         parts = []
         for m in history:
             role = m["role"].upper()
@@ -98,6 +98,11 @@ def build_prompt(question: str, chunks: List[RetrievedChunk], history: List[Dict
         history_text = "\n".join(parts)
 
     context = _format_chunks(chunks) if chunks else "(no relevant context found)"
+
+    evidence_refs = "\n".join(
+        [f"[{i+1}] {c.path}:{c.start_line}-{c.end_line}" for i, c in enumerate(chunks)]
+    ) or "(none)"
+
 
     return f"""SYSTEM:
 You are a senior software engineer.
@@ -112,33 +117,49 @@ CHAT HISTORY:
 QUESTION:
 {question}
 
-CODE CONTEXT:
+EVIDENCE REFERENCES (verbatim excerpts from the repository):
 {context}
 
+SYMBOL HINTS (use these names if relevant; do not invent new names):
+{_symbol_hints(chunks)}
+
 RESPONSE FORMAT (follow strictly):
+
 If found:
-Answer: <1-4 sentences>
-Evidence: [n] path:start-end, ...
-Next checks: <1-2 bullets>
+Answer:
+- 1–3 sentences.
+- Must explicitly name the most relevant function/class from SYMBOL HINTS.
+
+Evidence:
+- Copy exact citations in the form:
+  [n] path:start-end
+- Each citation must correspond to a chunk in EVIDENCE REFERENCES.
+- Do NOT invent file names or line numbers.
+
+Next checks:
+- 1–2 bullets.
+- Must reference specific files or symbols to inspect next.
 
 If not found:
 Not found in this repository.
-Next checks: <1-3 bullets of what files/keywords to search>
-"""
 
+Next checks:
+- 1–3 bullets.
+- Mention concrete files, folders, or keywords to search.
+"""
 
 async def generate_answer(repo_oid: ObjectId, question: str, history: List[Dict[str, str]], k: int = 8) -> Dict[str, Any]:
     chunks = await retrieve_chunks(repo_oid, question, k=k)
     # Deduplicate overlaps
-    seen = set()
+    seen_text = set()
     deduped = []
     for c in chunks:
-        key = (c.path, c.start_line, c.end_line)
-        if key in seen:
+        key = (c.path, c.end_line)  # cheap signature
+        if key in seen_text:
             continue
-        seen.add(key)
+        seen_text.add(key)
         deduped.append(c)
-    chunks = deduped    
+    chunks = deduped[:k]    
 
     prompt = build_prompt(question, chunks, history)
 
@@ -164,3 +185,21 @@ async def generate_answer(repo_oid: ObjectId, question: str, history: List[Dict[
             for i, c in enumerate(chunks)
         ],
     }
+
+def _symbol_hints(chunks: List[RetrievedChunk]) -> str:
+    hints = []
+    for c in chunks:
+        if not c.path.lower().endswith(".py"):
+            continue
+        hits = extract_python_symbols(c.text)
+        for h in hits:
+            hints.append(f"- {h.kind}: `{h.name}` (from {c.path}:{c.start_line}-{c.end_line})")
+    # de-dupe while preserving order
+    seen = set()
+    out = []
+    for x in hints:
+        if x in seen:
+            continue
+        seen.add(x)
+        out.append(x)
+    return "\n".join(out[:12]) if out else "(none)"
