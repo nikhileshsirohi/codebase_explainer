@@ -13,6 +13,7 @@ from app.api.v1.repos import router as repos_router
 from app.api.v1.overview import router as overview_router
 from app.api.v1.entrypoints import router as entrypoints_router
 from app.api.v1.architecture import router as architecture_router
+from app.api.v1.ui import router as ui_router
 
 logger = setup_logging()
 
@@ -23,7 +24,8 @@ def create_app() -> FastAPI:
     async def _startup():
         await ensure_indexes()
         logger.info("Indexes ensured")
-
+        
+    app.include_router(ui_router, prefix="")
     app.include_router(health_router, prefix="/api/v1")
     app.include_router(ingest_router, prefix="/api/v1")
     app.include_router(jobs_router, prefix="/api/v1")

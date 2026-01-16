@@ -1,0 +1,220 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Codebase Explainer</title>
+  <style>
+    body { font-family: ui-sans-serif, system-ui; margin: 0; background:#0b0f17; color:#e7eefc; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 24px; }
+    .row { display:flex; gap:16px; flex-wrap: wrap; }
+    .card { background:#121a2a; border:1px solid #22304a; border-radius:14px; padding:16px; }
+    .card h3 { margin:0 0 10px 0; font-size:16px; }
+    input, textarea, select, button { width:100%; padding:10px; border-radius:10px; border:1px solid #2c3a57; background:#0c1220; color:#e7eefc; }
+    textarea { min-height: 120px; }
+    button { cursor:pointer; background:#2b6dff; border:0; }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    .small { font-size:12px; opacity:.8; }
+    pre { white-space: pre-wrap; background:#0c1220; padding:12px; border-radius:12px; border:1px solid #2c3a57; overflow:auto; }
+    .pill { display:inline-block; padding:4px 10px; border-radius:999px; background:#0c1220; border:1px solid #2c3a57; font-size:12px; }
+    .ok { color:#7CFFB2; }
+    .bad { color:#FF7C7C; }
+    .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap:16px; }
+    @media (max-width: 900px){ .grid2{ grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1 style="margin:0 0 6px 0;">Codebase Explainer UI</h1>
+    <div class="small">Local UI for: Repos • Ingest • Ask • Overview • Entrypoints • Architecture</div>
+    <div class="card">
+  <h3>➕ Ingest New Repository</h3>
+  <input id="repoUrlInput" placeholder="https://github.com/user/repo" style="width:100%" />
+  <button id="btnAddRepo">Ingest</button>
+  <div id="addRepoStatus"></div>
+</div>
+    <div class="row" style="margin-top:18px;">
+      <div class="card" style="flex:1; min-width: 320px;">
+        <h3>1) Pick Repo</h3>
+        <button id="btnLoadRepos">Load Repos</button>
+        <div style="height:10px"></div>
+        <select id="repoSelect"></select>
+        <div style="margin-top:10px" class="small">
+          Selected repo_id: <span class="pill" id="repoIdPill">—</span>
+        </div>
+      </div>
+
+      <div class="card" style="flex:1; min-width: 320px;">
+        <h3>2) Ingest Repo</h3>
+        <div class="small">Runs background ingestion job (creates chunks + embeddings).</div>
+        <div style="height:10px"></div>
+        <button id="btnIngest">Run /ingest for selected repo</button>
+        <div style="height:10px"></div>
+        <div id="ingestStatus" class="small">—</div>
+      </div>
+    </div>
+
+    <div class="grid2" style="margin-top:16px;">
+      <div class="card">
+        <h3>3) Ask</h3>
+        <textarea id="question" placeholder="Ask a question... e.g. Where is ingestion implemented?"></textarea>
+        <div style="height:10px"></div>
+        <div class="row">
+          <div style="flex:1; min-width:160px;">
+            <label class="small">top_k</label>
+            <input id="topk" type="number" value="8" min="1" max="20" />
+          </div>
+          <div style="flex:1; min-width:160px;">
+            <label class="small">session_id (optional)</label>
+            <input id="sessionId" placeholder="leave empty to auto-create" />
+          </div>
+        </div>
+        <div style="height:10px"></div>
+        <button id="btnAsk">Ask</button>
+        <div style="height:10px"></div>
+        <div class="small">Result</div>
+        <pre id="askOut">(no output)</pre>
+      </div>
+
+      <div class="card">
+        <h3>4) Repo Analysis</h3>
+        <div class="row">
+          <button id="btnOverview" style="flex:1;">/overview</button>
+          <button id="btnEntrypoints" style="flex:1;">/entrypoints</button>
+          <button id="btnArch" style="flex:1;">/architecture</button>
+        </div>
+        <div style="height:10px"></div>
+        <div class="small">Output</div>
+        <pre id="analysisOut">(no output)</pre>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const apiBase = ""; // same origin (FastAPI)
+  const $ = (id) => document.getElementById(id);
+
+  function selectedRepoId(){
+    return $("repoSelect").value || "";
+  }
+
+  async function jget(url){
+    const r = await fetch(apiBase + url);
+    if(!r.ok) throw new Error(await r.text());
+    return await r.json();
+  }
+  async function jpost(url, body){
+    const r = await fetch(apiBase + url, {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify(body || {})
+    });
+    if(!r.ok) throw new Error(await r.text());
+    return await r.json();
+  }
+  
+$("btnAddRepo").onclick = async () => {
+  const url = $("repoUrlInput").value.trim();
+  if(!url) return alert("Enter a repo URL");
+
+  $("addRepoStatus").textContent = "Ingesting...";
+
+  try {
+    const res = await jpost("/api/v1/ingest", { repo_url: url });
+    $("addRepoStatus").innerHTML = `<span class="ok">Started</span>`;
+    await loadRepos(); // refresh repo list
+  } catch(e) {
+    $("addRepoStatus").innerHTML = `<span class="bad">Failed:</span> ${e.message}`;
+  }
+};
+
+  $("btnLoadRepos").onclick = async () => {
+    try{
+      const repos = await jget("/api/v1/repos");
+      $("repoSelect").innerHTML = repos.map(r =>
+        `<option value="${r.repo_id}">${r.repo_url} (${r.latest_job_status || "no job"})</option>`
+      ).join("");
+      $("repoIdPill").textContent = selectedRepoId();
+    }catch(e){
+      alert("Failed: " + e.message);
+    }
+  };
+
+  $("repoSelect").onchange = () => {
+    $("repoIdPill").textContent = selectedRepoId();
+  };
+
+$("btnIngest").onclick = async () => {
+  const rid = selectedRepoId();
+  if(!rid) return alert("Select a repo first.");
+  $("ingestStatus").textContent = "Running...";
+
+  try{
+    // Fetch repo details to get repo_url
+    const repo = await jget(`/api/v1/repos/${rid}`);
+    const out = await jpost("/api/v1/ingest", { repo_url: repo.canonical_repo_url || repo.repo_url });
+
+    $("ingestStatus").innerHTML = `<span class="ok">Started</span> job_id=${out.job_id || "(check /jobs)"}`;
+  }catch(e){
+    $("ingestStatus").innerHTML = `<span class="bad">Failed:</span> ${e.message}`;
+  }
+};
+
+  $("btnAsk").onclick = async () => {
+    const rid = selectedRepoId();
+    if(!rid) return alert("Select a repo first.");
+    const q = $("question").value.trim();
+    if(!q) return alert("Write a question.");
+    $("askOut").textContent = "Loading...";
+    try{
+      const top_k = parseInt($("topk").value || "8", 10);
+      const session_id = $("sessionId").value.trim();
+      const body = { question: q, top_k };
+      if(session_id) body.session_id = session_id;
+
+      const out = await jpost(`/api/v1/repos/${rid}/ask`, body);
+      $("askOut").textContent = JSON.stringify(out, null, 2);
+      if(out.session_id) $("sessionId").value = out.session_id;
+    }catch(e){
+      $("askOut").textContent = "ERROR: " + e.message;
+    }
+  };
+
+  $("btnOverview").onclick = async () => {
+    const rid = selectedRepoId();
+    if(!rid) return alert("Select a repo first.");
+    $("analysisOut").textContent = "Loading...";
+    try{
+      const out = await jget(`/api/v1/repos/${rid}/overview`);
+      $("analysisOut").textContent = JSON.stringify(out, null, 2);
+    }catch(e){
+      $("analysisOut").textContent = "ERROR: " + e.message;
+    }
+  };
+
+  $("btnEntrypoints").onclick = async () => {
+    const rid = selectedRepoId();
+    if(!rid) return alert("Select a repo first.");
+    $("analysisOut").textContent = "Loading...";
+    try{
+      const out = await jget(`/api/v1/repos/${rid}/entrypoints`);
+      $("analysisOut").textContent = JSON.stringify(out, null, 2);
+    }catch(e){
+      $("analysisOut").textContent = "ERROR: " + e.message;
+    }
+  };
+
+  $("btnArch").onclick = async () => {
+    const rid = selectedRepoId();
+    if(!rid) return alert("Select a repo first.");
+    $("analysisOut").textContent = "Loading...";
+    try{
+      const out = await jget(`/api/v1/repos/${rid}/architecture`);
+      $("analysisOut").textContent = JSON.stringify(out, null, 2);
+    }catch(e){
+      $("analysisOut").textContent = "ERROR: " + e.message;
+    }
+  };
+</script>
+</body>
+</html>

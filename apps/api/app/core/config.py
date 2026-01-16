@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     LLM_PROVIDER: str = "auto"  # auto | gemini | local | ollama
     LOCAL_LLM_MODEL: str = "google/flan-t5-base"
     OLLAMA_MODEL: str = "qwen2.5-coder:7b-instruct"
-
+    OLLAMA_BASE_URL: str = "http://127.0.0.1:11434"
     INGEST_TIMEOUT_MINUTES: int = 15
 
 settings = Settings()

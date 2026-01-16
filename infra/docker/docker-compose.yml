@@ -1,16 +1,31 @@
+version: "3.9"
+
 services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mongo
+      - ollama
+    environment:
+      MONGODB_URI: mongodb://mongo:27017
+      OLLAMA_BASE_URL: http://ollama:11434
+
   mongo:
-    image: mongo:7
-    container_name: cbe_mongo
+    image: mongo:6
     ports:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.runCommand({ ping: 1 })"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+
+  ollama:
+    image: ollama/ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
 
 volumes:
   mongo_data:
+  ollama_data:
