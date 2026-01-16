@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from email.mime import text
 from typing import Any, Dict, List
 from bson import ObjectId
 
@@ -61,6 +60,14 @@ async def retrieve_chunks(repo_oid: ObjectId, question: str, k: int = 8) -> List
     else:
         keywords = ["chunk", "embed", "search"]
 
+    find_filter = {"repo_id": repo_oid,
+        "text": {"$regex": "|".join(keywords), "$options": "i"},
+        }
+    
+    if intent == "github_fetch":
+        find_filter["path"] = {"$regex": "github_client\\.py|github|file_tree\\.py", "$options": "i"}
+
+    min_len = 40 if intent == "github_fetch" else 80
     fetch_limit = max(k * 8, 80) if flow_mode else max(k * 5, 40)
     filter_doc = {"repo_id": repo_oid}
     pipeline = [
@@ -103,7 +110,7 @@ async def retrieve_chunks(repo_oid: ObjectId, question: str, k: int = 8) -> List
             continue
         if lp.endswith(".gitignore") or lp.endswith(".dockerignore"):
             continue
-        min_len = 40 if intent == "github_fetch" else 80
+
         if len(text) < min_len:
             continue
 
