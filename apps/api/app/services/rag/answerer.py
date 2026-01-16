@@ -10,9 +10,10 @@ from app.services.embeddings.gemini_embedder import GeminiEmbedder
 
 from app.services.llm.gemini_chat import GeminiChatLLM
 from app.services.llm.ollama_llm import OllamaLLM
-
 from app.services.llm.gemini_chat import LLMRateLimitError
+
 from app.services.rag.symbols import extract_python_symbols
+from app.services.rag.links import extract_python_links
 
 @dataclass
 class RetrievedChunk:
@@ -120,6 +121,12 @@ QUESTION:
 EVIDENCE REFERENCES (verbatim excerpts from the repository):
 {context}
 
+EVIDENCE CITATIONS (copy EXACTLY; do not invent):
+{evidence_refs}
+
+PIPELINE HINTS (use these to explain "what calls what"; do not invent names):
+{_pipeline_hints(chunks)}
+
 SYMBOL HINTS (use these names if relevant; do not invent new names):
 {_symbol_hints(chunks)}
 
@@ -128,24 +135,19 @@ RESPONSE FORMAT (follow strictly):
 If found:
 Answer:
 - 1–3 sentences.
-- Must explicitly name the most relevant function/class from SYMBOL HINTS.
+- Include a 2–4 step flow (A -> B -> C) using names from PIPELINE HINTS / SYMBOL HINTS.
 
 Evidence:
-- Copy exact citations in the form:
-  [n] path:start-end
-- Each citation must correspond to a chunk in EVIDENCE REFERENCES.
-- Do NOT invent file names or line numbers.
+- Copy one or more lines from EVIDENCE CITATIONS exactly.
 
 Next checks:
-- 1–2 bullets.
-- Must reference specific files or symbols to inspect next.
+- 1–2 bullets referencing specific files or symbols.
 
 If not found:
 Not found in this repository.
 
 Next checks:
-- 1–3 bullets.
-- Mention concrete files, folders, or keywords to search.
+- 1–3 bullets with concrete files, folders, or keywords to search.
 """
 
 async def generate_answer(repo_oid: ObjectId, question: str, history: List[Dict[str, str]], k: int = 8) -> Dict[str, Any]:
@@ -203,3 +205,39 @@ def _symbol_hints(chunks: List[RetrievedChunk]) -> str:
         seen.add(x)
         out.append(x)
     return "\n".join(out[:12]) if out else "(none)"
+
+def _pipeline_hints(chunks: List[RetrievedChunk]) -> str:
+    items = []
+    for c in chunks:
+        if not c.path.lower().endswith(".py"):
+            continue
+        hints = extract_python_links(c.text)
+        for h in hints:
+            if h.kind == "calls":
+                items.append(f"- calls: `{h.name}()` (seen in {c.path}:{c.start_line}-{c.end_line})")
+            else:
+                items.append(f"- imports: `{h.name}` (seen in {c.path}:{c.start_line}-{c.end_line})")
+
+    # de-dupe preserve order
+    seen = set()
+    out = []
+    for x in items:
+        if x in seen:
+            continue
+        seen.add(x)
+        out.append(x)
+        
+    out.sort(key=lambda s: _priority(s))
+    return "\n".join(out[:20]) if out else "(none)"
+
+def _priority(name: str) -> int:
+    n = name.lower()
+    if "ingest" in n:
+        return 0
+    if "embed" in n or "embedding" in n:
+        return 1
+    if "chunk" in n:
+        return 2
+    if "search" in n or "retrieve" in n:
+        return 3
+    return 9
