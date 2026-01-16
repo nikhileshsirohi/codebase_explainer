@@ -12,10 +12,6 @@ dependencies = [
   "motor>=3.5",          # MongoDB async driver
   "loguru>=0.7",
   "google-genai",
-  "transformers>=4.41",
-  "torch",
-  "sentencepiece",
-  "accelerate",
 ]
 
 [project.optional-dependencies]

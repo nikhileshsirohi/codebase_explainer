@@ -23,6 +23,7 @@ from app.api.v1.jobs import router as jobs_router
 from app.api.v1.search import router as search_router
 from app.api.v1.chat import router as chat_router
 from app.api.v1.debug import router as debug_router
+from app.api.v1.repos import router as repos_router
 
 logger = setup_logging()
 
@@ -40,6 +41,7 @@ def create_app() -> FastAPI:
     app.include_router(search_router, prefix="/api/v1")
     app.include_router(chat_router, prefix="/api/v1")
     app.include_router(debug_router, prefix="/api/v1")
+    app.include_router(repos_router, prefix="/api/v1")
 
     return app
 
