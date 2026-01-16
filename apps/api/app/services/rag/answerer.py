@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from email.mime import text
 from typing import Any, Dict, List
 from bson import ObjectId
 
 from app.db.mongo import get_db
 from app.core.config import settings
-from app.services.embeddings.gemini_embedder import GeminiEmbedder
+from app.services.embeddings.ollama_embedder import OllamaEmbedder
 
 from app.services.llm.gemini_chat import GeminiChatLLM
 from app.services.llm.ollama_llm import OllamaLLM
@@ -14,6 +15,7 @@ from app.services.llm.gemini_chat import LLMRateLimitError
 
 from app.services.rag.symbols import extract_python_symbols
 from app.services.rag.links import extract_python_links
+from app.services.rag.intent import classify_intent
 
 @dataclass
 class RetrievedChunk:
@@ -34,7 +36,7 @@ def _format_chunks(chunks: List[RetrievedChunk]) -> str:
 
 async def retrieve_chunks(repo_oid: ObjectId, question: str, k: int = 8) -> List[RetrievedChunk]:
     db = get_db()
-    embedder = GeminiEmbedder()
+    embedder = OllamaEmbedder()
     qvec = embedder.embed_text(question)
 
     q = question.lower()
@@ -45,15 +47,29 @@ async def retrieve_chunks(repo_oid: ObjectId, question: str, k: int = 8) -> List
         )
     )
 
-    fetch_limit = max(k * 8, 80) if flow_mode else max(k * 5, 40)
+    intent = classify_intent(question)
 
+    path_filters = []
+    if intent == "repo_ingestion":
+        path_filters = ["services/ingestion", "services/indexing"]
+        keywords = ["ingest", "ingestion", "chunk", "embedding", "index", "repo_files", "code_chunks"]
+    elif intent == "api_flow":
+        path_filters = ["api/v1/chat.py"]
+    elif intent == "github_fetch":
+        path_filters = ["services/ingestion", "github_client", "file_tree"]
+        keywords = ["github", "blob", "get_blob", "file", "contents", "raw", "download", "api_url"]
+    else:
+        keywords = ["chunk", "embed", "search"]
+
+    fetch_limit = max(k * 8, 80) if flow_mode else max(k * 5, 40)
+    filter_doc = {"repo_id": repo_oid}
     pipeline = [
         {
             "$vectorSearch": {
                 "index": settings.MONGODB_VECTOR_INDEX,
                 "path": "embedding",
                 "queryVector": qvec,
-                "filter": {"repo_id": repo_oid},
+                "filter": filter_doc,
                 "numCandidates": max(400, fetch_limit * 5),
                 "limit": fetch_limit,
             }
@@ -71,6 +87,7 @@ async def retrieve_chunks(repo_oid: ObjectId, question: str, k: int = 8) -> List
     ]
 
     rows = await db["code_chunks"].aggregate(pipeline).to_list(length=None)
+    rows.sort(key=lambda r: 0 if (r.get("path","").lower().endswith(".py")) else 1)
 
     out: List[RetrievedChunk] = []
     seen: set[tuple[str, int, int]] = set()
@@ -80,9 +97,14 @@ async def retrieve_chunks(repo_oid: ObjectId, question: str, k: int = 8) -> List
         text = (r.get("text") or "").strip()
 
         lp = path.lower()
+        if path_filters and not any(p in lp for p in path_filters):
+            continue
         if lp.endswith(".md") or lp in ("readme.md", "license", "license.md"):
             continue
-        if len(text) < 80:
+        if lp.endswith(".gitignore") or lp.endswith(".dockerignore"):
+            continue
+        min_len = 40 if intent == "github_fetch" else 80
+        if len(text) < min_len:
             continue
 
         start_line = int(r.get("start_line", 0) or 0)
@@ -107,13 +129,8 @@ async def retrieve_chunks(repo_oid: ObjectId, question: str, k: int = 8) -> List
             break
 
     # Keyword fallback only when flow question lacks coverage
-    if flow_mode and len(out) < min(5, k):
-        keywords = [
-            "ingest", "ingestion", "chunk", "embedding",
-            "index", "repo_files", "repo_file_contents",
-            "code_chunks", "build_embeddings"
-        ]
-
+    need_keyword_fallback = (flow_mode and len(out) < min(5, k)) or (intent == "github_fetch" and len(out) < k)
+    if need_keyword_fallback:
         cursor = db["code_chunks"].find(
             {
                 "repo_id": repo_oid,
@@ -222,7 +239,7 @@ async def generate_answer(repo_oid: ObjectId, question: str, history: List[Dict[
     seen_text = set()
     deduped = []
     for c in chunks:
-        key = (c.path, c.end_line)  # cheap signature
+        key = (c.path, c.start_line, c.end_line)  # cheap signature
         if key in seen_text:
             continue
         seen_text.add(key)
@@ -246,6 +263,8 @@ async def generate_answer(repo_oid: ObjectId, question: str, history: List[Dict[
                 raise
             answer = OllamaLLM(model=settings.OLLAMA_MODEL).generate(prompt)
 
+    if answer.strip().startswith("Not found in this repository."):
+        return {"answer": answer, "sources": []}
     return {
         "answer": answer,
         "sources": [

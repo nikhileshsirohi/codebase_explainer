@@ -7,7 +7,7 @@ import hashlib
 from bson import ObjectId
 
 from app.db.mongo import get_db
-from app.services.embeddings.gemini_embedder import GeminiEmbedder
+from app.services.embeddings.ollama_embedder import OllamaEmbedder
 from app.services.indexing.chunker import chunk_text_by_lines
 
 REPO_FILE_CONTENTS = "repo_file_contents"
@@ -26,10 +26,11 @@ async def _set_job(job_id, extra: Dict[str, Any]):
 
 async def build_embeddings_for_job(repo_id: ObjectId, job_id: ObjectId) -> Dict[str, Any]:
     db = get_db()
-    embedder = GeminiEmbedder()
+    # embedder = GeminiEmbedder()
+    embedder = OllamaEmbedder()
 
     # clean old chunks for this job (idempotent)
-    await db[CODE_CHUNKS].delete_many({"job_id": job_id})
+    await db[CODE_CHUNKS].delete_many({"repo_id": repo_id})
 
     cursor = db[REPO_FILE_CONTENTS].find(
         {"repo_id": repo_id, "job_id": job_id},

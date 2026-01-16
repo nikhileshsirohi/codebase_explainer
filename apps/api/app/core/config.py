@@ -11,8 +11,11 @@ class Settings(BaseSettings):
 
     GITHUB_TOKEN: str | None = None
     GEMINI_API_KEY: str | None = None
-    EMBEDDING_DIM: int = 1536
+    EMBEDDING_DIM: int = 768 #1536
     MONGODB_VECTOR_INDEX: str = "code_chunks_v1"
+
+    EMBEDDING_PROVIDER: str = "ollama" 
+    OLLAMA_EMBED_MODEL: str = "nomic-embed-text"
 
     GEMINI_CHAT_MODEL: str = "gemini-2.0-flash"
     CHAT_HISTORY_MAX_TURNS: int = 6

@@ -11,18 +11,25 @@ class Chunk:
 
 MIN_CHUNK_CHARS = 80
 
+NON_CODE_PREFIXES = (".github/", "docs/", "data/", "assets/", ".vscode/", ".idea/", "node_modules/", ".venv/", "venv/")
+NON_CODE_FILES = (
+    "readme.md", "license", "license.md", "changelog.md", "contributing.md",
+    ".gitignore", ".dockerignore",
+)
+NON_CODE_EXTS = (".md", ".rst", ".txt", ".png", ".jpg", ".jpeg", ".gif", ".pdf", ".svg",
+                 ".toml", ".ini")
+
+
 def should_skip_file(path: str) -> bool:
     p = path.lower()
 
-    # Skip README and markdown docs
-    if p.endswith("readme.md"):
+    if p.startswith(NON_CODE_PREFIXES):
         return True
-    if p.endswith(".md"):
+    if p in NON_CODE_FILES:
         return True
-
-    # Skip non-code text noise
-    if p.endswith((".txt", ".rst")):
+    if p.endswith(NON_CODE_EXTS):
         return True
+    
 
     return False
 

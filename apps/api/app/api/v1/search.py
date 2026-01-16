@@ -3,7 +3,7 @@ from bson import ObjectId
 
 from app.core.config import settings
 from app.db.mongo import get_db
-from app.services.embeddings.gemini_embedder import GeminiEmbedder
+from app.services.embeddings.ollama_embedder import OllamaEmbedder
 
 router = APIRouter(tags=["search"])
 
@@ -15,7 +15,8 @@ async def semantic_search(repo_id: str, q: str, k: int = 8):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid repo_id")
 
-    embedder = GeminiEmbedder()
+    # embedder = GeminiEmbedder()
+    embedder = OllamaEmbedder()
     query_vec = embedder.embed_text(q)
 
     pipeline = [
