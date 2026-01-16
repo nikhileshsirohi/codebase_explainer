@@ -2,20 +2,26 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# install uv + build tools (keeps it fast)
-RUN pip install --no-cache-dir uv
+# System deps (safe minimum for pip builds)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+  && rm -rf /var/lib/apt/lists/*
 
-# copy only dependency files first (better layer caching)
+# Copy only dependency files first (better caching)
 COPY pyproject.toml ./
-# if you have it, also copy the lock file
+
+# If you have a lock file, copy it too (choose one if exists)
+# COPY poetry.lock ./
 # COPY uv.lock ./
 
-# install deps
-RUN uv pip install --system --no-cache -r pyproject.toml
+# Install project (editable not needed inside container)
+RUN pip install --no-cache-dir -U pip \
+  && pip install --no-cache-dir .
 
-# now copy the code
+# Now copy source code
 COPY . .
 
 ENV PYTHONUNBUFFERED=1
 
-CMD ["uvicorn", "apps.api.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,42 +1,42 @@
-version: "3.9"
-
 services:
   api:
-    build: .
-    container_name: codebase_explainer_api
+    build:
+      context: ../../apps/api
+      dockerfile: Dockerfile
+    container_name: cbe_api
     ports:
       - "8000:8000"
-    depends_on:
-      - mongo
-      - ollama
     environment:
-      MONGODB_URI: mongodb://mongo:27017
-      MONGODB_DB: codebase_explainer
-      EMBEDDING_PROVIDER: ollama
-      OLLAMA_BASE_URL: http://ollama:11434
-      LLM_PROVIDER: ollama
-    volumes:
-      - .:/app
-    restart: unless-stopped
+      # If using local mongo container:
+      - MONGODB_URI=mongodb://mongo:27017
+      - MONGODB_DB=codebase_explainer
+
+      # Ollama is NOT inside docker by default.
+      # On Mac/Windows, host.docker.internal points to your host machine.
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+
+      # your default config
+      - EMBEDDING_PROVIDER=ollama
+      - OLLAMA_EMBED_MODEL=nomic-embed-text
+      - LLM_PROVIDER=ollama
+      - OLLAMA_MODEL=qwen2.5-coder:7b-instruct
+      - MONGODB_VECTOR_INDEX=code_chunks_v1
+    depends_on:
+      mongo:
+        condition: service_healthy
 
   mongo:
-    image: mongo:6
-    container_name: codebase_explainer_mongo
+    image: mongo:7
+    container_name: cbe_mongo
     ports:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
-    restart: unless-stopped
-
-  ollama:
-    image: ollama/ollama:latest
-    container_name: codebase_explainer_ollama
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.runCommand({ ping: 1 })"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
 volumes:
   mongo_data:
-  ollama_data:
