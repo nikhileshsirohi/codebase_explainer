@@ -49,7 +49,7 @@ async def build_embeddings_for_job(repo_id: ObjectId, job_id: ObjectId) -> Dict[
         if not text.strip():
             continue
 
-        chunks = chunk_text_by_lines(text, max_chars=1800, overlap_lines=10)
+        chunks = chunk_text_by_lines(text, path, max_chars=1800, overlap_lines=10)
 
         for idx, ch in enumerate(chunks):
             # small “prefix” improves retrieval for codebases

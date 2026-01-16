@@ -99,6 +99,8 @@ TEXT_EXTENSIONS = {
 
 def _is_likely_text(path: str) -> bool:
     p = path.lower()
+    if p.endswith(".md"):
+        return False
     if p.endswith("dockerfile"):
         return True
     return any(p.endswith(ext) for ext in TEXT_EXTENSIONS)

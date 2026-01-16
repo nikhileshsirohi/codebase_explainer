@@ -4,6 +4,7 @@ from bson import ObjectId
 from app.db.mongo import get_db
 from app.schemas.repo import RepoOut
 from datetime import datetime, timedelta
+from app.core.config import settings
 
 router = APIRouter(tags=["repos"])
 
@@ -22,6 +23,22 @@ async def list_repos():
             projection={"status": 1, "updated_at": 1, "error": 1},
         )
 
+        if latest and latest.get("status") == "running":
+            updated_at = latest.get("updated_at")
+            if updated_at and datetime.utcnow() - updated_at > timedelta(minutes=settings.INGEST_TIMEOUT_MINUTES):
+                await db["ingest_jobs"].update_one(
+                    {"_id": latest["_id"]},
+                    {
+                        "$set": {
+                            "status": "failed",
+                            "error": "Ingestion timed out",
+                            "updated_at": datetime.utcnow(),
+                        }
+                    },
+                )
+
+        latest["status"] = "failed"
+        latest["error"] = "Ingestion timed out"
         out.append(
             RepoOut(
                 repo_id=str(rid),
@@ -58,19 +75,19 @@ async def get_repo(repo_id: str):
     )
     if latest and latest.get("status") == "running":
         updated_at = latest.get("updated_at")
-        if updated_at and datetime.utcnow() - updated_at > timedelta(minutes=25):
+        if updated_at and datetime.utcnow() - updated_at > timedelta(minutes=settings.INGEST_TIMEOUT_MINUTES):
             await db["ingest_jobs"].update_one(
                 {"_id": latest["_id"]},
                 {
                     "$set": {
                         "status": "failed",
-                        "error": "Marked failed due to timeout",
+                        "error": "Ingestion timed out",
                         "updated_at": datetime.utcnow(),
                     }
                 },
             )
             latest["status"] = "failed"
-            latest["error"] = "Marked failed due to timeout"
+            latest["error"] = "Ingestion timed out"
     return RepoOut(
         repo_id=str(rid),
         repo_url=r.get("repo_url", ""),

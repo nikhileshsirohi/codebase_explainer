@@ -25,7 +25,7 @@ def _format_chunks(chunks: List[RetrievedChunk]) -> str:
     blocks = []
     for i, c in enumerate(chunks, start=1):
         blocks.append(
-            f"[{i}] {c.path}:{c.start_line}-{c.end_line} (score={c.score:.3f})\n"
+            f"[{i}] {c.path}:{c.start_line}-{c.end_line}\n"
             f"```text\n{c.text}\n```"
         )
     return "\n\n".join(blocks)
@@ -35,6 +35,8 @@ async def retrieve_chunks(repo_oid: ObjectId, question: str, k: int = 8) -> List
     embedder = GeminiEmbedder()
     qvec = embedder.embed_text(question)
 
+    fetch_limit = max(k * 5, 40)  # fetch more, then filter down to k
+
     pipeline = [
         {
             "$vectorSearch": {
@@ -42,8 +44,8 @@ async def retrieve_chunks(repo_oid: ObjectId, question: str, k: int = 8) -> List
                 "path": "embedding",
                 "queryVector": qvec,
                 "filter": {"repo_id": repo_oid},
-                "numCandidates": max(60, k * 10),
-                "limit": k,
+                "numCandidates": max(200, fetch_limit * 5),
+                "limit": fetch_limit,
             }
         },
         {
@@ -58,18 +60,31 @@ async def retrieve_chunks(repo_oid: ObjectId, question: str, k: int = 8) -> List
         },
     ]
 
-    rows = await db["code_chunks"].aggregate(pipeline).to_list(length=k)
+    rows = await db["code_chunks"].aggregate(pipeline).to_list(length=None)
+
     out: List[RetrievedChunk] = []
     for r in rows:
+        path = (r.get("path") or "")
+        text = (r.get("text") or "").strip()
+
+        lp = path.lower()
+        if lp.endswith(".md") or lp in ("readme.md", "license", "license.md"):
+            continue
+        if len(text) < 80:
+            continue
+
         out.append(
             RetrievedChunk(
-                path=r.get("path", ""),
+                path=path,
                 start_line=int(r.get("start_line", 0) or 0),
                 end_line=int(r.get("end_line", 0) or 0),
-                text=r.get("text", "") or "",
+                text=text,
                 score=float(r.get("score", 0.0) or 0.0),
             )
         )
+        if len(out) >= k:
+            break
+
     return out
 
 def build_prompt(question: str, chunks: List[RetrievedChunk], history: List[Dict[str, str]]) -> str:
@@ -84,29 +99,47 @@ def build_prompt(question: str, chunks: List[RetrievedChunk], history: List[Dict
 
     context = _format_chunks(chunks) if chunks else "(no relevant context found)"
 
-    return f"""You are a senior software engineer.
-Answer concisely and accurately.
-Base answers ONLY on the provided code context.
-Use citations like [1] path:start-end.
-Do not repeat the question or instructions.
+    return f"""SYSTEM:
+You are a senior software engineer.
+Use ONLY the CODE CONTEXT. Do not guess.
 
-Conversation (recent):
-{history_text}
+If the CODE CONTEXT does not contain enough information to answer, reply exactly:
+Not found in this repository.
 
-User question:
+CHAT HISTORY:
+{history_text if history_text else "(none)"}
+
+QUESTION:
 {question}
 
-Code context:
+CODE CONTEXT:
 {context}
 
-Now write:
-1) A direct answer (bulleted if helpful)
-2) Where in the code (citations)
-3) If unsure, what to check next
+RESPONSE FORMAT (follow strictly):
+If found:
+Answer: <1-4 sentences>
+Evidence: [n] path:start-end, ...
+Next checks: <1-2 bullets>
+
+If not found:
+Not found in this repository.
+Next checks: <1-3 bullets of what files/keywords to search>
 """
+
 
 async def generate_answer(repo_oid: ObjectId, question: str, history: List[Dict[str, str]], k: int = 8) -> Dict[str, Any]:
     chunks = await retrieve_chunks(repo_oid, question, k=k)
+    # Deduplicate overlaps
+    seen = set()
+    deduped = []
+    for c in chunks:
+        key = (c.path, c.start_line, c.end_line)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(c)
+    chunks = deduped    
+
     prompt = build_prompt(question, chunks, history)
 
     provider = (settings.LLM_PROVIDER or "auto").lower()
