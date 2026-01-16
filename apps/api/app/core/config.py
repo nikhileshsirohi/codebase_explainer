@@ -14,4 +14,10 @@ class Settings(BaseSettings):
     EMBEDDING_DIM: int = 1536
     MONGODB_VECTOR_INDEX: str = "code_chunks_v1"
 
+    GEMINI_CHAT_MODEL: str = "gemini-2.0-flash"
+    CHAT_HISTORY_MAX_TURNS: int = 6
+
+    LLM_PROVIDER: str = "auto"  # auto|gemini|local
+    LOCAL_LLM_MODEL: str = "google/flan-t5-base"
+
 settings = Settings()

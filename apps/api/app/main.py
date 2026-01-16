@@ -20,6 +20,7 @@ from app.api.v1.ingest import router as ingest_router
 from app.api.v1.jobs import router as jobs_router
 from app.api.v1.search import router as search_router
 from app.db.repos import ensure_indexes
+from app.api.v1.chat import router as chat_router
 
 logger = setup_logging()
 
@@ -35,6 +36,8 @@ def create_app() -> FastAPI:
     app.include_router(ingest_router, prefix="/api/v1")
     app.include_router(jobs_router, prefix="/api/v1")
     app.include_router(search_router, prefix="/api/v1")
+    app.include_router(chat_router, prefix="/api/v1")
+
     return app
 
 app = create_app()
