@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Dict, List
 from bson import ObjectId
+from pymongo.errors import OperationFailure
 
 from app.db.mongo import get_db
 from app.core.config import settings
 from app.services.embeddings.ollama_embedder import OllamaEmbedder
 
 from app.services.llm.gemini_chat import GeminiChatLLM
+from app.services.llm.local_t5 import LocalT5LLM
 from app.services.llm.ollama_llm import OllamaLLM
 from app.services.llm.gemini_chat import LLMRateLimitError
 
@@ -24,6 +27,72 @@ class RetrievedChunk:
     text: str
     score: float
 
+
+STOP_WORDS = {
+    "a", "an", "and", "api", "are", "code", "does", "end", "explain", "file",
+    "files", "flow", "for", "from", "how", "in", "is", "main", "of", "or",
+    "repo", "repository", "show", "the", "to", "what", "where", "which",
+}
+
+
+def _intent_profile(intent: str) -> Dict[str, List[str]]:
+    if intent == "repo_ingestion":
+        return {
+            "path_hints": ["api/v1/ingest", "services/ingestion", "services/indexing"],
+            "keywords": ["ingest", "ingestion", "index", "indexing", "chunk", "embedding", "repo_files", "code_chunks"],
+        }
+    if intent == "api_flow":
+        return {
+            "path_hints": ["api/v1/chat", "services/rag", "services/llm"],
+            "keywords": ["ask", "chat", "session", "history", "answer", "retrieve", "rag", "sources"],
+        }
+    if intent == "github_fetch":
+        return {
+            "path_hints": ["services/ingestion", "github_client", "file_tree"],
+            "keywords": ["github", "blob", "tree", "file", "contents", "download", "api_url"],
+        }
+    return {"path_hints": [], "keywords": []}
+
+
+def _question_keywords(question: str, *, extra: List[str] | None = None) -> List[str]:
+    tokens = re.findall(r"[a-zA-Z_][a-zA-Z0-9_./-]{1,}", question.lower())
+    out: List[str] = []
+    seen = set()
+    for token in [*tokens, *(extra or [])]:
+        cleaned = token.strip().lower()
+        if not cleaned or cleaned in STOP_WORDS or cleaned.isdigit():
+            continue
+        if cleaned in seen:
+            continue
+        seen.add(cleaned)
+        out.append(cleaned)
+    return out
+
+
+def _build_keyword_regex(keywords: List[str]) -> str | None:
+    terms = [re.escape(k) for k in keywords if k]
+    if not terms:
+        return None
+    return "|".join(terms)
+
+
+def _rank_candidate(row: Dict[str, Any], *, keywords: List[str], path_hints: List[str]) -> float:
+    path = (row.get("path") or "").lower()
+    text = (row.get("text") or "").lower()
+
+    score = float(row.get("score", 0.0) or 0.0)
+    if path.endswith(".py"):
+        score += 0.2
+
+    path_matches = sum(1 for hint in path_hints if hint and hint in path)
+    term_matches = sum(1 for kw in keywords if kw in text)
+    exact_path_terms = sum(1 for kw in keywords if kw in path)
+
+    score += path_matches * 2.0
+    score += exact_path_terms * 1.2
+    score += min(term_matches, 6) * 0.35
+    return score
+
 def _format_chunks(chunks: List[RetrievedChunk]) -> str:
     blocks = []
     for i, c in enumerate(chunks, start=1):
@@ -33,11 +102,35 @@ def _format_chunks(chunks: List[RetrievedChunk]) -> str:
         )
     return "\n\n".join(blocks)
 
+
+def _is_local_vector_search_error(exc: Exception) -> bool:
+    if not isinstance(exc, OperationFailure):
+        return False
+    return "$vectorSearch stage is only allowed on MongoDB Atlas" in str(exc)
+
+
+async def _keyword_rows(
+    repo_oid: ObjectId,
+    *,
+    keyword_regex: str | None,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    db = get_db()
+    query: Dict[str, Any] = {"repo_id": repo_oid}
+    if keyword_regex:
+        query["$or"] = [
+            {"text": {"$regex": keyword_regex, "$options": "i"}},
+            {"path": {"$regex": keyword_regex, "$options": "i"}},
+        ]
+
+    cursor = db["code_chunks"].find(
+        query,
+        {"_id": 0, "path": 1, "start_line": 1, "end_line": 1, "text": 1},
+    ).limit(limit)
+    return await cursor.to_list(length=limit)
+
 async def retrieve_chunks(repo_oid: ObjectId, question: str, k: int = 8) -> List[RetrievedChunk]:
     db = get_db()
-    embedder = OllamaEmbedder()
-    qvec = embedder.embed_text(question)
-
     q = question.lower()
     flow_mode = any(
         x in q for x in (
@@ -47,25 +140,10 @@ async def retrieve_chunks(repo_oid: ObjectId, question: str, k: int = 8) -> List
     )
 
     intent = classify_intent(question)
-
-    path_filters = []
-    if intent == "repo_ingestion":
-        path_filters = ["services/ingestion", "services/indexing"]
-        keywords = ["ingest", "ingestion", "chunk", "embedding", "index", "repo_files", "code_chunks"]
-    elif intent == "api_flow":
-        path_filters = ["api/v1/chat.py"]
-    elif intent == "github_fetch":
-        path_filters = ["services/ingestion", "github_client", "file_tree"]
-        keywords = ["github", "blob", "get_blob", "file", "contents", "raw", "download", "api_url"]
-    else:
-        keywords = ["chunk", "embed", "search"]
-
-    find_filter = {"repo_id": repo_oid,
-        "text": {"$regex": "|".join(keywords), "$options": "i"},
-        }
-    
-    if intent == "github_fetch":
-        find_filter["path"] = {"$regex": "github_client\\.py|github|file_tree\\.py", "$options": "i"}
+    profile = _intent_profile(intent)
+    path_hints = profile["path_hints"]
+    keywords = _question_keywords(question, extra=profile["keywords"])
+    keyword_regex = _build_keyword_regex(keywords)
 
     min_len = 40 if intent == "github_fetch" else 80
     fetch_limit = max(k * 8, 80) if flow_mode else max(k * 5, 40)
@@ -75,7 +153,7 @@ async def retrieve_chunks(repo_oid: ObjectId, question: str, k: int = 8) -> List
             "$vectorSearch": {
                 "index": settings.MONGODB_VECTOR_INDEX,
                 "path": "embedding",
-                "queryVector": qvec,
+                "queryVector": [],
                 "filter": filter_doc,
                 "numCandidates": max(400, fetch_limit * 5),
                 "limit": fetch_limit,
@@ -93,8 +171,17 @@ async def retrieve_chunks(repo_oid: ObjectId, question: str, k: int = 8) -> List
         },
     ]
 
-    rows = await db["code_chunks"].aggregate(pipeline).to_list(length=None)
-    rows.sort(key=lambda r: 0 if (r.get("path","").lower().endswith(".py")) else 1)
+    try:
+        embedder = OllamaEmbedder()
+        qvec = embedder.embed_text(question)
+        pipeline[0]["$vectorSearch"]["queryVector"] = qvec
+        rows = await db["code_chunks"].aggregate(pipeline).to_list(length=None)
+    except Exception as exc:
+        if not _is_local_vector_search_error(exc):
+            raise
+        rows = await _keyword_rows(repo_oid, keyword_regex=keyword_regex, limit=max(80, k * 10))
+
+    rows.sort(key=lambda r: _rank_candidate(r, keywords=keywords, path_hints=path_hints), reverse=True)
 
     out: List[RetrievedChunk] = []
     seen: set[tuple[str, int, int]] = set()
@@ -104,7 +191,7 @@ async def retrieve_chunks(repo_oid: ObjectId, question: str, k: int = 8) -> List
         text = (r.get("text") or "").strip()
 
         lp = path.lower()
-        if path_filters and not any(p in lp for p in path_filters):
+        if path_hints and not any(p in lp for p in path_hints) and not any(kw in lp for kw in keywords):
             continue
         if lp.endswith(".md") or lp in ("readme.md", "license", "license.md"):
             continue
@@ -135,18 +222,12 @@ async def retrieve_chunks(repo_oid: ObjectId, question: str, k: int = 8) -> List
         if not flow_mode and len(out) >= k:
             break
 
-    # Keyword fallback only when flow question lacks coverage
-    need_keyword_fallback = (flow_mode and len(out) < min(5, k)) or (intent == "github_fetch" and len(out) < k)
+    need_keyword_fallback = bool(keyword_regex) and (
+        len(out) < min(k, 5) or flow_mode or intent in {"github_fetch", "api_flow"}
+    )
     if need_keyword_fallback:
-        cursor = db["code_chunks"].find(
-            {
-                "repo_id": repo_oid,
-                "text": {"$regex": "|".join(keywords), "$options": "i"},
-            },
-            {"path": 1, "start_line": 1, "end_line": 1, "text": 1},
-        ).limit(50)
-
-        extra = await cursor.to_list(length=50)
+        extra = await _keyword_rows(repo_oid, keyword_regex=keyword_regex, limit=max(50, k * 8))
+        extra.sort(key=lambda r: _rank_candidate(r, keywords=keywords, path_hints=path_hints), reverse=True)
         for r in extra:
             path = (r.get("path") or "")
             text = (r.get("text") or "").strip()
@@ -174,7 +255,7 @@ async def retrieve_chunks(repo_oid: ObjectId, question: str, k: int = 8) -> List
                 )
             )
 
-            if len(out) >= k:
+            if len(out) >= max(k, 10 if flow_mode else k):
                 break
 
     return out[:k]
@@ -256,11 +337,13 @@ async def generate_answer(repo_oid: ObjectId, question: str, history: List[Dict[
     prompt = build_prompt(question, chunks, history)
 
     provider = (settings.LLM_PROVIDER or "auto").lower()
-    if provider not in ("auto", "gemini", "ollama"):
+    if provider not in ("auto", "gemini", "ollama", "local"):
         provider = "auto"
 
     if provider == "ollama":
         answer = OllamaLLM(model=settings.OLLAMA_MODEL).generate(prompt)
+    elif provider == "local":
+        answer = LocalT5LLM().generate(prompt)
     else:
         try:
             answer = GeminiChatLLM().generate(prompt)
@@ -268,7 +351,13 @@ async def generate_answer(repo_oid: ObjectId, question: str, history: List[Dict[
             # auto fallback OR if gemini fails and provider=auto
             if provider == "gemini":
                 raise
-            answer = OllamaLLM(model=settings.OLLAMA_MODEL).generate(prompt)
+            if provider == "auto":
+                try:
+                    answer = OllamaLLM(model=settings.OLLAMA_MODEL).generate(prompt)
+                except Exception:
+                    answer = LocalT5LLM().generate(prompt)
+            else:
+                raise
 
     if answer.strip().startswith("Not found in this repository."):
         return {"answer": answer, "sources": []}

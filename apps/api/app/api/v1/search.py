@@ -1,5 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from bson import ObjectId
+from pymongo.errors import OperationFailure
+import re
 
 from app.core.config import settings
 from app.db.mongo import get_db
@@ -15,33 +17,40 @@ async def semantic_search(repo_id: str, q: str, k: int = 8):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid repo_id")
 
-    # embedder = GeminiEmbedder()
-    embedder = OllamaEmbedder()
-    query_vec = embedder.embed_text(q)
-
-    pipeline = [
-        {
-            "$vectorSearch": {
-                "index": settings.MONGODB_VECTOR_INDEX,
-                "path": "embedding",
-                "queryVector": query_vec,
-                "filter": {"repo_id": repo_oid},
-                "numCandidates": max(50, k * 10),
-                "limit": k,
-            }
-        },
-        {
-            "$project": {
-                "_id": 0,
-                "path": 1,
-                "start_line": 1,
-                "end_line": 1,
-                "text": 1,
-                "score": {"$meta": "vectorSearchScore"},
-            }
-        },
-    ]
-
-    # $vectorSearch must be first stage; score returned via vectorSearchScore  [oai_citation:8‡MongoDB](https://www.mongodb.com/docs/atlas/atlas-vector-search/vector-search-stage/)
-    results = await db["code_chunks"].aggregate(pipeline).to_list(length=k)
+    try:
+        embedder = OllamaEmbedder()
+        query_vec = embedder.embed_text(q)
+        pipeline = [
+            {
+                "$vectorSearch": {
+                    "index": settings.MONGODB_VECTOR_INDEX,
+                    "path": "embedding",
+                    "queryVector": query_vec,
+                    "filter": {"repo_id": repo_oid},
+                    "numCandidates": max(50, k * 10),
+                    "limit": k,
+                }
+            },
+            {
+                "$project": {
+                    "_id": 0,
+                    "path": 1,
+                    "start_line": 1,
+                    "end_line": 1,
+                    "text": 1,
+                    "score": {"$meta": "vectorSearchScore"},
+                }
+            },
+        ]
+        results = await db["code_chunks"].aggregate(pipeline).to_list(length=k)
+    except OperationFailure as exc:
+        if "$vectorSearch stage is only allowed on MongoDB Atlas" not in str(exc):
+            raise
+        results = await db["code_chunks"].find(
+            {
+                "repo_id": repo_oid,
+                "text": {"$regex": re.escape(q), "$options": "i"},
+            },
+            {"_id": 0, "path": 1, "start_line": 1, "end_line": 1, "text": 1},
+        ).limit(k).to_list(length=k)
     return {"results": results}

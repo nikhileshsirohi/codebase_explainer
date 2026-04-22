@@ -1,205 +1,195 @@
-# Codebase Explainer 🧠📦
+# Codebase Explainer
 
-Codebase Explainer is a **developer-focused backend system** that ingests a GitHub repository, indexes its source code, and allows you to **ask natural-language questions about the codebase** such as:
+Codebase Explainer ingests a GitHub repository, indexes its source code, and lets you ask grounded questions about the codebase through a FastAPI backend and a Next.js frontend.
 
-- “Where is ingestion implemented?”
-- “Explain the ingestion flow end-to-end”
-- “What are the main entrypoints?”
-- “Show the architecture / call flow”
+Example questions:
+- "Where is ingestion implemented?"
+- "Explain the ingestion flow end to end."
+- "What are the main entrypoints?"
+- "Show the architecture or call flow."
 
-It is designed to work reliably on **real-world codebases**, not toy examples.
-
----
-
-## ✨ Key Features
+## Features
 
 - GitHub repository ingestion
-- Code chunking & vector embeddings
-- Semantic + keyword fallback retrieval
-- Intent-aware question routing
-- Architecture & entrypoint analysis
-- Works fully **locally** using Ollama
-- JSON-first responses (developer friendly)
+- File tree fetch, content fetch, chunking, and embedding generation
+- Grounded code Q&A with source references
+- Overview, entrypoint, and architecture endpoints
+- Next.js dashboard for ingest, re-ingest, ask, and analysis
+- Ollama-first local setup
+- Retrieval fallback for local MongoDB when Atlas vector search is unavailable
 
----
-
-## 🧰 Technology Stack
+## Stack
 
 ### Backend
-- **FastAPI** – REST API framework
-- **MongoDB Atlas** – document store + vector search
-- **Motor** – async MongoDB driver
+- FastAPI
+- Motor / MongoDB
+- Background ingestion jobs
 
-### AI / ML
-- **Ollama**
-  - `nomic-embed-text` → embeddings
-  - `qwen2.5-coder:7b-instruct` → LLM
-- **Gemini** (optional / fallback)
+### AI
+- Ollama embeddings: `nomic-embed-text`
+- Ollama chat model: `qwen2.5-coder:7b-instruct`
+- Gemini optional fallback
 
-### Code Intelligence
-- Python AST parsing
-- Custom symbol extraction
-- Call-graph & pipeline detection
-- Intent classification (flow / API / ingestion / search)
+### Frontend
+- Next.js App Router
+- React
+- Proxy-based API access through `/backend/*`
 
-### Dev & Ops
-- Docker
-- Uvicorn
-- Ruff (linting)
-- Async background jobs
+## How Ingestion Works
 
----
+1. `POST /api/v1/ingest` stores a repo document and creates an ingest job.
+2. A background task reads the GitHub repo metadata and default branch.
+3. The app fetches the repository tree and stores file metadata in `repo_files`.
+4. It downloads text/code file contents into `repo_file_contents`.
+5. It chunks those files and stores embeddings plus chunk metadata in `code_chunks`.
+6. After that, the repo can be queried through `/ask`, `/overview`, `/entrypoints`, and `/architecture`.
 
-## 🏗 High-Level Architecture
+## Question Answering Flow
 
----
+1. The user sends a question to `POST /api/v1/repos/{repo_id}/ask`.
+2. The system classifies the question intent.
+3. Relevant chunks are retrieved.
+   On MongoDB Atlas this uses vector search.
+   On local MongoDB this falls back to keyword/path retrieval.
+4. The LLM generates an answer using only retrieved repository context.
+5. The API returns the answer plus source locations.
 
-## 🔁 Ingestion Flow
-
-1. User submits a **GitHub repo URL**
-2. `/ingest` API creates:
-   - repo document
-   - ingest job
-3. Background worker:
-   - fetches repo files
-   - skips non-code files
-   - chunks code by lines
-   - generates embeddings
-   - stores chunks in `code_chunks`
-4. Repo becomes queryable
-
----
-
-## 💬 Question Answering Flow
-
-1. User asks a question (`/ask`)
-2. System:
-   - classifies intent (flow, API, ingestion, GitHub, generic)
-   - retrieves relevant chunks (vector + fallback)
-   - extracts symbols & pipeline hints
-3. LLM generates a **grounded answer**
-4. Response includes:
-   - answer
-   - exact source locations
-
----
-
-## 🔍 Analysis APIs
-
-### `/overview`
-Summarizes:
-- components
-- tech stack
-- data flow
-
-### `/entrypoints`
-Detects:
-- FastAPI app startup
-- API routes
-- background jobs
-
-### `/architecture`
-Builds:
-- call graph
-- entrypoint → execution paths
-
----
-
-## 🌐 API Endpoints (Core)
+## Core Endpoints
 
 | Endpoint | Description |
-|--------|------------|
-| `POST /api/v1/ingest` | Ingest a new GitHub repo |
-| `POST /api/v1/repos/{repo_id}/ask` | Ask questions |
-| `GET /api/v1/repos/{repo_id}/overview` | Repo overview |
-| `GET /api/v1/repos/{repo_id}/entrypoints` | Entrypoints |
-| `GET /api/v1/repos/{repo_id}/architecture` | Architecture |
-| `GET /health` | System health |
+| --- | --- |
+| `POST /api/v1/ingest` | Ingest a GitHub repository |
+| `GET /api/v1/repos` | List ingested repositories |
+| `GET /api/v1/jobs/{job_id}` | Inspect ingestion job status |
+| `POST /api/v1/repos/{repo_id}/ask` | Ask a grounded code question |
+| `GET /api/v1/repos/{repo_id}/overview` | Repository overview |
+| `GET /api/v1/repos/{repo_id}/entrypoints` | Detected entrypoints |
+| `GET /api/v1/repos/{repo_id}/architecture` | Architecture flows |
+| `GET /api/v1/health` | Health check |
 
----
+## Frontend
 
-## 🖥 UI
+The Next.js UI supports:
+- ingesting a repository
+- re-ingesting an existing repository
+- viewing job status
+- asking grounded questions
+- inspecting overview, entrypoints, and architecture output
 
-- Simple HTML UI
-- JSON-first responses
-- Two ingestion modes:
-  - New repo ingestion
-  - Re-ingest selected repo
-- Designed for **debuggability first**
+Default local URLs:
+- API: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+- Web: [http://127.0.0.1:3000](http://127.0.0.1:3000)
 
----
-
-## 🧪 Why JSON Output?
-
-This is intentional.
-
-- Exposes correctness issues early
-- Easy to debug & extend
-- Suitable for:
-  - CLI tools
-  - VS Code extensions
-  - Future UI layers
-
-Pretty UI can be added later **without changing the backend**.
-
----
-
-## 🚀 How to Run
+## Local Development
 
 ### Prerequisites
-- Docker
-- Docker Compose
+
+- Python 3.10+
+- Node.js 22+
+- MongoDB running locally on `mongodb://localhost:27017`
+- Ollama running locally
+
+### 1. Clone the repository
 
 ```bash
-docker compose up --build
-docker exec -it codebase_explainer_ollama ollama pull nomic-embed-text
-docker exec -it codebase_explainer_ollama ollama pull qwen2.5-coder:7b-instruct
-
-curl http://localhost:8000/docs
-```
-## How to run (Without Docker)
-
-```bass
-https://github.com/nikhileshsirohi/codebase_explainer.git
+git clone https://github.com/nikhileshsirohi/codebase_explainer.git
 cd codebase_explainer
 ```
-### Install Backend Dependencies
+
+### 2. Configure backend environment
+
+Create `apps/api/.env` with values like:
+
+```env
+ENV=dev
+MONGODB_URI=mongodb://localhost:27017
+MONGODB_DB=codebase_explainer
+GITHUB_TOKEN=
+GEMINI_API_KEY=
+MONGODB_VECTOR_INDEX=code_chunks_v1
+LLM_PROVIDER=auto
+OLLAMA_EMBED_MODEL=nomic-embed-text
+OLLAMA_MODEL=qwen2.5-coder:7b-instruct
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+```
+
+`GITHUB_TOKEN` is optional for public repositories. If you set it, make sure it is valid.
+
+### 3. Install backend dependencies
+
 ```bash
 cd apps/api
 pip install -e ".[dev]"
 ```
 
-### Start the FastAPI Server
-***macOS / Linux***
+### 4. Start the backend
+
+macOS / Linux:
+
 ```bash
 python -m uvicorn app.main:app --reload --port 8000
 ```
 
-***Windows***
+Windows:
+
 ```bash
 uvicorn app.main:app --reload --port 8000
 ```
-***The API will be available at:***
-```bash
-http://127.0.0.1:8000
-```
 
-### START Ollama (Required)
-*** In another terminal ***
+### 5. Start Ollama
+
+In another terminal:
+
 ```bash
 ollama serve
 ollama pull nomic-embed-text
 ollama pull qwen2.5-coder:7b-instruct
 ```
 
-***Verify Is everything running***
+### 6. Start the frontend
+
 ```bash
-curl http://127.0.0.1:8000/health
+cd apps/web
+npm install
+API_ORIGIN=http://127.0.0.1:8000 npm run dev
 ```
 
-***Expected response***
+### 7. Verify the backend
+
+```bash
+curl http://127.0.0.1:8000/api/v1/health
+```
+
+Expected response:
+
+```json
 {
   "status": "ok",
   "mongo": true,
   "ollama": true
 }
+```
+
+## Docker Compose
+
+The compose setup now includes:
+- `mongo` on port `27017`
+- `api` on port `8000`
+- `web` on port `3000`
+
+Start the stack:
+
+```bash
+cd infra/docker
+docker compose up --build
+```
+
+Notes:
+- The API container expects Ollama to be reachable at `http://host.docker.internal:11434`.
+- Start Ollama on your host machine before using ingestion or question answering.
+
+## Notes
+
+- MongoDB Atlas vector search is optional, not required for local development.
+- Local MongoDB uses keyword/path retrieval fallback for `/ask` and `/search`.
+- Do not commit real secrets in `apps/api/.env`. Rotate any exposed tokens before pushing to GitHub.

@@ -1,9 +1,12 @@
 import httpx
 
+from app.core.config import settings
+
 class OllamaEmbedder:
-    def __init__(self, model: str = "nomic-embed-text"):
-        self.model = model
-        self.url = "http://localhost:11434/api/embeddings"
+    def __init__(self, model: str | None = None, base_url: str | None = None):
+        self.model = model or settings.OLLAMA_EMBED_MODEL
+        base = (base_url or settings.OLLAMA_BASE_URL).rstrip("/")
+        self.url = f"{base}/api/embeddings"
 
     def embed_text(self, text: str) -> list[float]:
         r = httpx.post(

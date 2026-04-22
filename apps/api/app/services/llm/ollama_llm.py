@@ -1,15 +1,18 @@
 from __future__ import annotations
 import httpx
 
+from app.core.config import settings
+
 class OllamaLLM:
     def __init__(
         self,
-        model: str = "qwen2.5-coder:7b-instruct",
-        base_url: str = "http://localhost:11434",
+        model: str | None = None,
+        base_url: str | None = None,
         timeout: float = 120.0,
     ):
-        self.model = model
-        self.url = f"{base_url}/api/generate"
+        self.model = model or settings.OLLAMA_MODEL
+        base = (base_url or settings.OLLAMA_BASE_URL).rstrip("/")
+        self.url = f"{base}/api/generate"
         self.timeout = timeout
 
     def generate(self, prompt: str) -> str:

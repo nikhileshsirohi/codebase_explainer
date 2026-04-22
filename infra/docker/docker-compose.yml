@@ -25,6 +25,21 @@ services:
       mongo:
         condition: service_healthy
 
+  web:
+    build:
+      context: ../../apps/web
+      dockerfile: Dockerfile
+      args:
+        API_ORIGIN: http://api:8000
+    container_name: cbe_web
+    ports:
+      - "3000:3000"
+    environment:
+      - API_ORIGIN=http://api:8000
+    depends_on:
+      api:
+        condition: service_started
+
   mongo:
     image: mongo:7
     container_name: cbe_mongo

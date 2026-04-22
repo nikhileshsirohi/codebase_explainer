@@ -36,9 +36,8 @@ async def list_repos():
                         }
                     },
                 )
-
-        latest["status"] = "failed"
-        latest["error"] = "Ingestion timed out"
+                latest["status"] = "failed"
+                latest["error"] = "Ingestion timed out"
         out.append(
             RepoOut(
                 repo_id=str(rid),

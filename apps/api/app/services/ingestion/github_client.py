@@ -23,14 +23,25 @@ class GitHubClient:
         self.base = "https://api.github.com"
         self.token = token or getattr(settings, "GITHUB_TOKEN", None)
 
-    def _headers(self) -> Dict[str, str]:
+    def _headers(self, *, include_auth: bool = True) -> Dict[str, str]:
         headers = {
             "Accept": "application/vnd.github+json",
             "User-Agent": "codebase-explainer-bot/0.1",
         }
-        if self.token:
+        if include_auth and self.token:
             headers["Authorization"] = f"Bearer {self.token}"
         return headers
+
+    @staticmethod
+    def _is_bad_credentials(resp: httpx.Response) -> bool:
+        if resp.status_code != 401:
+            return False
+        try:
+            body = resp.json()
+        except Exception:
+            return False
+        message = str(body.get("message", "")).lower()
+        return "bad credentials" in message
 
     def _rate_limit(self, resp: httpx.Response) -> GitHubRateLimit:
         def _to_int(v: Optional[str]) -> Optional[int]:
@@ -47,6 +58,8 @@ class GitHubClient:
         url = f"{self.base}{path}"
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(url, headers=self._headers(), params=params)
+            if self.token and self._is_bad_credentials(resp):
+                resp = await client.get(url, headers=self._headers(include_auth=False), params=params)
 
         if resp.status_code in (403, 429):
             rl = self._rate_limit(resp)
@@ -79,6 +92,8 @@ class GitHubClient:
         # blob_api_url is like: https://api.github.com/repos/{owner}/{repo}/git/blobs/{sha}
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(blob_api_url, headers=self._headers())
+            if self.token and self._is_bad_credentials(resp):
+                resp = await client.get(blob_api_url, headers=self._headers(include_auth=False))
 
         if resp.status_code in (403, 429):
             rl = self._rate_limit(resp)
